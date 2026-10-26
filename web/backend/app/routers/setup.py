@@ -1,0 +1,55 @@
+"""
+Endpoint de setup inicial — solo funciona si no hay usuarios en la DB.
+Similar al flujo de primer acceso de NocoDB / Chatwoot.
+"""
+import bcrypt
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
+from app.database import get_db
+
+router = APIRouter(prefix="/api/setup", tags=["Setup"])
+
+
+class SetupRequest(BaseModel):
+    username: str
+    password: str
+    nombre_completo: str = ""
+
+
+@router.get("/status")
+def setup_status():
+    """Retorna si el sistema ya fue configurado (hay al menos un usuario)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM gestordocumentos.web_users")
+            count = cur.fetchone()[0]
+    return {"needs_setup": count == 0}
+
+
+@router.post("/create-admin", status_code=status.HTTP_201_CREATED)
+def create_admin(data: SetupRequest):
+    """Crea el primer usuario administrador. Solo funciona si no hay usuarios."""
+    if len(data.password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La contraseña debe tener al menos 6 caracteres"
+        )
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM gestordocumentos.web_users")
+            count = cur.fetchone()[0]
+            if count > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="El sistema ya fue configurado. Usa el login normal."
+                )
+            password_hash = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
+            cur.execute(
+                "INSERT INTO gestordocumentos.web_users (username, password_hash, role, nombre_completo) "
+                "VALUES (%s, %s, 'admin', %s)",
+                (data.username, password_hash, data.nombre_completo or None)
+            )
+        conn.commit()
+
+    return {"message": f"Administrador '{data.username}' creado correctamente. Ya puedes iniciar sesión."}

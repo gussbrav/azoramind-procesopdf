@@ -1,0 +1,27 @@
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults (FastAPI Depends)
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["B"]
+# conftest.py setea env vars antes de importar app — orden requerido
+"tests/conftest.py" = ["E402"]
+# main.py llama a setup_logging() antes de los imports a propósito
+# para que loguru intercepte los logs de cualquier módulo importado después
+"app/main.py" = ["E402"]
+
+[format]
+quote-style = "double"

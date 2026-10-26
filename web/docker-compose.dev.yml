@@ -1,0 +1,38 @@
+# docker-compose.dev.yml — DESARROLLO (rama: dev / local con hot reload)
+# Uso: docker compose -f docker-compose.dev.yml up --build
+
+services:
+  gestordocumentos-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gestordocumentos-backend-dev
+    ports:
+      - "8021:8001"
+    env_file:
+      - ./backend/.env.dev
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+    volumes:
+      - ./backend:/app       # hot reload
+    restart: unless-stopped
+    networks:
+      - gestordocumentos-dev-net
+
+  gestordocumentos-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /
+    container_name: gestordocumentos-frontend-dev
+    ports:
+      - "3021:80"
+    depends_on:
+      - gestordocumentos-backend
+    restart: unless-stopped
+    networks:
+      - gestordocumentos-dev-net
+
+networks:
+  gestordocumentos-dev-net:
+    driver: bridge

@@ -1,0 +1,35 @@
+# docker-compose.cert.yml — CERTIFICACION (rama: cert / EasyPanel: azoramind_cert)
+# Uso: docker compose -f docker-compose.cert.yml up --build
+
+services:
+  gestordocumentos-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gestordocumentos-backend-cert
+    ports:
+      - "8011:8001"
+    env_file:
+      - ./backend/.env.cert
+    restart: unless-stopped
+    networks:
+      - gestordocumentos-cert-net
+
+  gestordocumentos-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /
+    container_name: gestordocumentos-frontend-cert
+    ports:
+      - "3011:80"
+    depends_on:
+      - gestordocumentos-backend
+    restart: unless-stopped
+    networks:
+      - gestordocumentos-cert-net
+
+networks:
+  gestordocumentos-cert-net:
+    driver: bridge

@@ -1,0 +1,15 @@
+# Normalizar saltos de línea: LF en repositorio, checkout según OS
+* text=auto eol=lf
+
+# Scripts shell siempre LF
+*.sh text eol=lf
+
+# Binarios — no tocar
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary

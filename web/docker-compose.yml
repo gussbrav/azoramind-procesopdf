@@ -1,0 +1,36 @@
+# docker-compose.yml — PRODUCCION (rama: main / EasyPanel: azoramind)
+# Uso local: docker compose up --build
+# En EasyPanel: cada servicio se despliega por separado desde GitHub
+
+services:
+  gestordocumentos-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gestordocumentos-backend
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+    networks:
+      - gestordocumentos-net
+
+  gestordocumentos-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /
+    container_name: gestordocumentos-frontend
+    ports:
+      - "3001:80"
+    depends_on:
+      - gestordocumentos-backend
+    restart: unless-stopped
+    networks:
+      - gestordocumentos-net
+
+networks:
+  gestordocumentos-net:
+    driver: bridge
