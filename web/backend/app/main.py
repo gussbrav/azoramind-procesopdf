@@ -20,6 +20,7 @@ from app.config import settings
 from app.database import close_db_pool, init_db_pool
 from app.routers.facturas import router as facturas_router
 from app.routers.health import router as health_router
+from app.routers.plantillas import router as plantillas_router
 from app.routers.reportes import router as reportes_router
 from app.routers.settings import router as settings_router
 from app.routers.setup import router as setup_router
@@ -100,6 +101,7 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(facturas_router)
+app.include_router(plantillas_router)
 app.include_router(reportes_router)
 app.include_router(setup_router)
 app.include_router(settings_router)

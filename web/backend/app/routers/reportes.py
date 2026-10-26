@@ -1,5 +1,5 @@
 """
-Router para generación y descarga de reportes Excel.
+Router para generación de reportes Excel de distribución contable.
 """
 import logging
 from datetime import date
@@ -19,35 +19,42 @@ router = APIRouter(prefix="/api/reportes", tags=["Reportes"])
 
 @router.get("/excel")
 def exportar_excel(
-    fecha_desde: Optional[date] = Query(default=None, description="Filtro fecha desde (YYYY-MM-DD)"),
-    fecha_hasta: Optional[date] = Query(default=None, description="Filtro fecha hasta (YYYY-MM-DD)"),
-    proveedor_ruc: Optional[str] = Query(default=None, description="Filtrar por RUC del proveedor"),
-    solo_alertas: bool = Query(default=False, description="Solo facturas con discrepancia de total"),
+    factura_id: Optional[int] = Query(default=None, description="Exportar una factura específica"),
+    fecha_desde: Optional[date] = Query(default=None),
+    fecha_hasta: Optional[date] = Query(default=None),
+    proveedor_ruc: Optional[str] = Query(default=None),
+    numero_factura: Optional[str] = Query(default=None),
     current_user: TokenData = Depends(get_current_user),
 ):
     """
-    Genera y descarga un archivo Excel con el detalle de facturas procesadas.
+    Genera y descarga el Excel de distribución contable.
 
-    Aplica los filtros opcionales y retorna el .xlsx directamente.
+    Si se pasa `factura_id`, exporta solo esa factura.
+    Si no, exporta todas las facturas que cumplan los filtros.
     """
-    facturas = _fetch_facturas_para_reporte(
+    filas = _fetch_distribucion(
+        factura_id=factura_id,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
         proveedor_ruc=proveedor_ruc,
-        solo_alertas=solo_alertas,
+        numero_factura=numero_factura,
     )
 
-    if not facturas:
-        raise HTTPException(status_code=404, detail="No hay facturas que coincidan con los filtros")
+    if not filas:
+        raise HTTPException(
+            status_code=404,
+            detail="No hay distribución calculada para los filtros indicados. "
+                   "Verifique que las facturas están procesadas y tienen plantilla asignada.",
+        )
 
-    nombre = _generar_nombre_reporte(fecha_desde, fecha_hasta, proveedor_ruc)
-    excel_bytes = generar_excel(facturas, nombre_reporte=nombre)
+    maestros = _fetch_maestros()
+    nombre = _nombre_reporte(factura_id, fecha_desde, fecha_hasta)
+    excel_bytes = generar_excel(filas, maestros=maestros, nombre_reporte=nombre)
 
-    filename = f"{nombre}.xlsx"
     return Response(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{nombre}.xlsx"'},
     )
 
 
@@ -55,35 +62,58 @@ def exportar_excel(
 def obtener_stats(
     current_user: TokenData = Depends(get_current_user),
 ):
-    """Retorna estadísticas de resumen del lote de facturas procesadas."""
+    """Estadísticas de resumen del lote de facturas procesadas."""
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
-                    COUNT(*) AS total_facturas,
-                    COUNT(*) FILTER (WHERE estado = 'procesado') AS procesadas,
-                    COUNT(*) FILTER (WHERE estado = 'pendiente') AS pendientes,
-                    COUNT(*) FILTER (WHERE estado = 'error') AS con_error,
-                    COUNT(*) FILTER (WHERE total_discrepancia > 0.10) AS con_alerta,
-                    SUM(total_declarado) AS monto_total,
-                    AVG(confianza_ia) AS confianza_promedio
-                FROM facturas
+                    COUNT(DISTINCT f.id)                              AS total_facturas,
+                    COUNT(DISTINCT f.id) FILTER (WHERE f.estado = 'procesado')  AS procesadas,
+                    COUNT(DISTINCT f.id) FILTER (WHERE f.estado = 'pendiente')  AS pendientes,
+                    COUNT(DISTINCT f.id) FILTER (WHERE f.estado = 'error')      AS con_error,
+                    COUNT(DISTINCT d.factura_id)                       AS con_distribucion,
+                    SUM(f.subtotal)                                    AS monto_total,
+                    AVG(f.confianza_ia)                                AS confianza_promedio
+                FROM facturas f
+                LEFT JOIN distribucion_facturas d ON d.factura_id = f.id
             """)
             stats = dict(cur.fetchone())
 
     return stats
 
 
-def _fetch_facturas_para_reporte(
-    fecha_desde: Optional[date],
-    fecha_hasta: Optional[date],
-    proveedor_ruc: Optional[str],
-    solo_alertas: bool,
+@router.get("/preview/{factura_id}")
+def preview_distribucion(
+    factura_id: int,
+    current_user: TokenData = Depends(get_current_user),
+):
+    """
+    Retorna las filas de distribución contable de una factura en JSON.
+    Útil para previsualizar antes de descargar el Excel.
+    """
+    filas = _fetch_distribucion(factura_id=factura_id)
+    if not filas:
+        raise HTTPException(
+            status_code=404,
+            detail="Sin distribución para esta factura. ¿Tiene plantilla asignada?",
+        )
+    return {"factura_id": factura_id, "total_filas": len(filas), "filas": filas}
+
+
+def _fetch_distribucion(
+    factura_id: Optional[int] = None,
+    fecha_desde: Optional[date] = None,
+    fecha_hasta: Optional[date] = None,
+    proveedor_ruc: Optional[str] = None,
+    numero_factura: Optional[str] = None,
 ) -> list[dict]:
-    """Consulta facturas con sus ítems para construir el reporte."""
-    conditions = ["f.estado = 'procesado'"]
+    """Consulta las filas de distribución aplicando filtros."""
+    conditions = []
     params: list = []
 
+    if factura_id:
+        conditions.append("d.factura_id = %s")
+        params.append(factura_id)
     if fecha_desde:
         conditions.append("f.fecha_emision >= %s")
         params.append(fecha_desde)
@@ -93,47 +123,56 @@ def _fetch_facturas_para_reporte(
     if proveedor_ruc:
         conditions.append("f.proveedor_ruc = %s")
         params.append(proveedor_ruc)
-    if solo_alertas:
-        conditions.append("f.total_discrepancia > 0.10")
+    if numero_factura:
+        conditions.append("f.numero_factura ILIKE %s")
+        params.append(f"%{numero_factura}%")
 
-    where = " AND ".join(conditions)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT f.*
-                FROM facturas f
-                WHERE {where}
-                ORDER BY f.fecha_emision DESC, f.id
+                SELECT d.*
+                FROM distribucion_facturas d
+                JOIN facturas f ON f.id = d.factura_id
+                {where}
+                ORDER BY f.fecha_emision DESC, d.factura_id, d.id
                 """,
                 params,
             )
-            facturas_rows = cur.fetchall()
-
-            resultado = []
-            for row in facturas_rows:
-                fdata = dict(row)
-                cur.execute(
-                    "SELECT * FROM factura_items WHERE factura_id = %s ORDER BY numero_item",
-                    [fdata["id"]],
-                )
-                fdata["items"] = [dict(i) for i in cur.fetchall()]
-                # Normalizar filename para el generador
-                fdata.setdefault("filename", fdata.get("nombre_archivo", ""))
-                resultado.append(fdata)
-
-    return resultado
+            return [dict(r) for r in cur.fetchall()]
 
 
-def _generar_nombre_reporte(
+def _fetch_maestros() -> dict:
+    """Carga los catálogos maestro para las hojas de referencia del Excel."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            def fetch(table):
+                try:
+                    cur.execute(f"SELECT * FROM {table} ORDER BY 1")
+                    return [dict(r) for r in cur.fetchall()]
+                except Exception:
+                    return []
+
+            return {
+                "sedes":         fetch("maestro_sedes"),
+                "centros_costos": fetch("maestro_centros_costos"),
+                "proyectos":     fetch("maestro_proyectos"),
+                "cuentas":       fetch("maestro_cuentas_contables"),
+                "lineas_negocio": fetch("maestro_lineas_negocio"),
+                "etl":           [],
+            }
+
+
+def _nombre_reporte(
+    factura_id: Optional[int],
     fecha_desde: Optional[date],
     fecha_hasta: Optional[date],
-    proveedor_ruc: Optional[str],
 ) -> str:
-    partes = ["Facturas"]
-    if proveedor_ruc:
-        partes.append(proveedor_ruc)
+    if factura_id:
+        return f"Distribucion_Factura_{factura_id}"
+    partes = ["Distribucion_Facturas"]
     if fecha_desde:
         partes.append(str(fecha_desde))
     if fecha_hasta:

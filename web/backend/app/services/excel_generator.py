@@ -1,9 +1,16 @@
 """
-Generador de Excel con el detalle de facturas procesadas.
+Generador de Excel con distribución contable de facturas.
 
-Produce un archivo .xlsx con:
-  - Hoja "Resumen": una fila por factura (totales, proveedor, fecha, estado)
-  - Hoja "Detalle Items": una fila por ítem de factura (valor unitario, cantidad, subtotal)
+Produce el archivo .xlsx con la estructura exacta requerida por Transaltisa:
+
+Hoja1 (output contable):
+  PLACA | SEDE/PLANTA | CUENTA | CENTRO COSTOS | LÍNEA NEGOCIO/SERVICIO |
+  PROYECTO | DESCRIPCIÓN | CANTIDAD | COSTO UNITARIO | ETL/TERCEROS |
+  SUBTOTAL DE FACTURA | NUM DE FACTURA
+
+Hojas Maestro (catálogos de referencia):
+  Maestro Sedes | Maestro Centro Costos | Maestro Linea Negocio Servicios |
+  Maestro Proyectos | Maestro ETL | Cuentas Cont.
 """
 import io
 import logging
@@ -11,154 +18,255 @@ from datetime import datetime
 from typing import Optional
 
 import openpyxl
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 logger = logging.getLogger(__name__)
 
-# Paleta de colores Azoramind
-_COLOR_HEADER = "1E3A5F"      # azul oscuro
-_COLOR_SUBHEADER = "2E6DA4"   # azul medio
-_COLOR_ALERTA = "FFD700"      # amarillo — discrepancia de totales
-_COLOR_OK = "D4EDDA"          # verde suave — sin discrepancia
+# ── Paleta de colores ────────────────────────────────────────────────────────
+_AZUL_HEADER   = "1F4E79"   # azul oscuro para headers principales
+_AZUL_MEDIO    = "2E75B6"   # azul medio para sub-headers
+_GRIS_CLARO    = "F2F2F2"   # fondo alternado filas
+_VERDE_CLARO   = "E2EFDA"   # fila OK
+_AMARILLO      = "FFEB9C"   # fila con diferencia de redondeo
+_BLANCO        = "FFFFFF"
+
+# ── Columnas de Hoja1 (output contable) ─────────────────────────────────────
+_HOJA1_HEADERS = [
+    "PLACA",
+    "SEDE/PLANTA",
+    "CUENTA",
+    "CENTRO COSTOS",
+    "LÍNEA NEGOCIO/SERVICIO",
+    "PROYECTO",
+    "DESCRIPCIÓN",
+    "CANTIDAD",
+    "COSTO UNITARIO",
+    "ETL/TERCEROS",
+    "SUBTOTAL DE FACTURA",
+    "NUM DE FACTURA",
+]
+
+_HOJA1_KEYS = [
+    "placa",
+    "sede_planta",
+    "cuenta",
+    "centro_costos",
+    "linea_negocio_servicio",
+    "proyecto",
+    "descripcion",
+    "cantidad",
+    "costo_unitario",
+    "etl_terceros",
+    "subtotal_factura",
+    "numero_factura",
+]
+
+# Anchos de columna en caracteres
+_HOJA1_WIDTHS = [8, 12, 14, 15, 22, 10, 24, 10, 16, 14, 20, 20]
 
 
-def _header_font(bold: bool = True) -> Font:
-    return Font(name="Calibri", bold=bold, color="FFFFFF", size=10)
+def _font(bold: bool = False, size: int = 10, color: str = "000000") -> Font:
+    return Font(name="Calibri", bold=bold, size=size, color=color)
 
 
-def _cell_font() -> Font:
-    return Font(name="Calibri", size=10)
-
-
-def _header_fill(color: str) -> PatternFill:
+def _fill(color: str) -> PatternFill:
     return PatternFill(start_color=color, end_color=color, fill_type="solid")
 
 
-def _autofit_columns(ws) -> None:
-    """Ajusta el ancho de columnas al contenido."""
-    for col in ws.columns:
-        max_len = 0
-        col_letter = get_column_letter(col[0].column)
-        for cell in col:
-            if cell.value:
-                max_len = max(max_len, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = min(max_len + 4, 50)
+def _thin_border() -> Border:
+    side = Side(style="thin", color="BFBFBF")
+    return Border(left=side, right=side, top=side, bottom=side)
 
 
-def _write_header_row(ws, headers: list[str], row: int = 1, color: str = _COLOR_HEADER) -> None:
+def _center() -> Alignment:
+    return Alignment(horizontal="center", vertical="center")
+
+
+def _write_hoja1(ws, filas: list[dict]) -> None:
+    """Escribe Hoja1 con los datos de distribución contable."""
+
+    # ── Fila de encabezados ──────────────────────────────────────────────────
+    for col_idx, header in enumerate(_HOJA1_HEADERS, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = _font(bold=True, color="FFFFFF")
+        cell.fill = _fill(_AZUL_HEADER)
+        cell.alignment = _center()
+        cell.border = _thin_border()
+        ws.column_dimensions[get_column_letter(col_idx)].width = _HOJA1_WIDTHS[col_idx - 1]
+
+    ws.row_dimensions[1].height = 20
+    ws.freeze_panes = "A2"
+
+    # ── Filas de datos ───────────────────────────────────────────────────────
+    total_costo = 0.0
+    for row_idx, fila in enumerate(filas, start=2):
+        bg = _GRIS_CLARO if row_idx % 2 == 0 else _BLANCO
+        for col_idx, key in enumerate(_HOJA1_KEYS, start=1):
+            value = fila.get(key, "")
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = _font(size=10)
+            cell.fill = _fill(bg)
+            cell.border = _thin_border()
+
+            # Alineación según tipo de dato
+            if key in ("costo_unitario", "cantidad", "subtotal_factura"):
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                cell.number_format = '#,##0.00'
+            elif key in ("placa", "sede_planta", "cuenta", "centro_costos",
+                         "linea_negocio_servicio", "proyecto", "etl_terceros"):
+                cell.alignment = _center()
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+        total_costo += fila.get("costo_unitario", 0)
+
+    # ── Fila de totales ──────────────────────────────────────────────────────
+    total_row = len(filas) + 2
+    ws.cell(row=total_row, column=8, value="TOTAL").font = _font(bold=True)
+    total_cell = ws.cell(row=total_row, column=9, value=round(total_costo, 2))
+    total_cell.font = _font(bold=True)
+    total_cell.number_format = '#,##0.00'
+    total_cell.fill = _fill(_AZUL_MEDIO)
+    total_cell.font = _font(bold=True, color="FFFFFF")
+
+
+def _write_maestro(ws, titulo: str, headers: list[str], rows: list[dict], keys: list[str]) -> None:
+    """Escribe una hoja de maestro/catálogo."""
+    ws.cell(row=1, column=1, value=titulo).font = _font(bold=True, size=12, color=_AZUL_HEADER)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+
     for col_idx, header in enumerate(headers, start=1):
-        cell = ws.cell(row=row, column=col_idx, value=header)
-        cell.font = _header_font()
-        cell.fill = _header_fill(color)
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell = ws.cell(row=2, column=col_idx, value=header)
+        cell.font = _font(bold=True, color="FFFFFF")
+        cell.fill = _fill(_AZUL_MEDIO)
+        cell.alignment = _center()
+
+    for row_idx, row in enumerate(rows, start=3):
+        for col_idx, key in enumerate(keys, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=row.get(key, ""))
+            cell.font = _font()
+
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=10)
+        ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 40)
+
+    ws.freeze_panes = "A3"
 
 
-def generar_excel(facturas: list[dict], nombre_reporte: Optional[str] = None) -> bytes:
+def generar_excel(
+    filas_distribucion: list[dict],
+    maestros: Optional[dict] = None,
+    nombre_reporte: str = "Distribución Facturas",
+) -> bytes:
     """
-    Genera un archivo Excel en memoria con el detalle de facturas.
+    Genera el archivo Excel de distribución contable.
 
     Args:
-        facturas: lista de dicts enriquecidos por valor_unitario.enriquecer_factura()
-        nombre_reporte: nombre opcional para la primera hoja
+        filas_distribucion: lista de dicts de distribucion_facturas
+                           (output de plantilla_service.distribuir_factura)
+        maestros: dict opcional con datos de tablas maestro para las hojas de catálogo
+                  keys esperadas: sedes, centros_costos, proyectos, cuentas, lineas_negocio
+        nombre_reporte: nombre de la primera hoja
 
     Returns:
-        bytes del archivo .xlsx listo para enviar como response
+        bytes del archivo .xlsx listo para descarga
     """
     wb = openpyxl.Workbook()
-    ws_resumen = wb.active
-    ws_resumen.title = nombre_reporte or "Resumen"
-    ws_detalle = wb.create_sheet(title="Detalle Items")
 
-    # ── Hoja Resumen ─────────────────────────────────────────────────────────
-    resumen_headers = [
-        "N°", "Archivo", "N° Factura", "Fecha Emisión",
-        "Proveedor RUC", "Proveedor", "Cliente RUC", "Cliente",
-        "Moneda", "Subtotal", "IGV", "Total Declarado",
-        "Total Calculado", "Discrepancia", "Items", "Estado",
-    ]
-    _write_header_row(ws_resumen, resumen_headers)
+    # ── Hoja1: output contable ───────────────────────────────────────────────
+    ws_hoja1 = wb.active
+    ws_hoja1.title = "Hoja1"
+    _write_hoja1(ws_hoja1, filas_distribucion)
 
-    for i, factura in enumerate(facturas, start=1):
-        discrepancia = factura.get("total_discrepancia", 0.0) or 0.0
-        row_fill = _COLOR_ALERTA if discrepancia > 0.10 else _COLOR_OK
-        fill = PatternFill(start_color=row_fill, end_color=row_fill, fill_type="solid")
+    # ── Plantilla: referencia de porcentajes ─────────────────────────────────
+    ws_plantilla = wb.create_sheet("Plantilla")
+    _write_maestro(
+        ws_plantilla,
+        "Plantilla de Distribución",
+        ["CUENTA", "CENTRO COSTOS", "LN/SERVICIO", "PROYECTO", "DESCRIPCIÓN", "PORCENTAJE %"],
+        [
+            {
+                "cuenta": f["cuenta"],
+                "centro_costos": f["centro_costos"],
+                "linea_negocio_servicio": f["linea_negocio_servicio"],
+                "proyecto": f["proyecto"],
+                "descripcion": f["descripcion"],
+                "porcentaje": f"{float(f.get('porcentaje_aplicado', 0)) * 100:.4f}%",
+            }
+            for f in filas_distribucion
+        ],
+        ["cuenta", "centro_costos", "linea_negocio_servicio", "proyecto", "descripcion", "porcentaje"],
+    )
 
-        row_data = [
-            i,
-            factura.get("filename", ""),
-            factura.get("numero_factura", ""),
-            factura.get("fecha_emision", ""),
-            factura.get("proveedor_ruc", ""),
-            factura.get("proveedor_razon_social", ""),
-            factura.get("cliente_ruc", ""),
-            factura.get("cliente_razon_social", ""),
-            factura.get("moneda", "PEN"),
-            factura.get("subtotal", ""),
-            factura.get("igv", ""),
-            factura.get("total", ""),
-            factura.get("total_calculado", ""),
-            round(discrepancia, 2),
-            len(factura.get("items") or []),
-            "ALERTA" if discrepancia > 0.10 else "OK",
-        ]
-        row_idx = i + 1
-        for col_idx, value in enumerate(row_data, start=1):
-            cell = ws_resumen.cell(row=row_idx, column=col_idx, value=value)
-            cell.font = _cell_font()
-            cell.fill = fill
-            cell.alignment = Alignment(vertical="center")
+    # ── Hojas Maestro ────────────────────────────────────────────────────────
+    maestros = maestros or {}
 
-    _autofit_columns(ws_resumen)
-    ws_resumen.freeze_panes = "A2"
+    ws_sedes = wb.create_sheet("Maestro Sedes")
+    _write_maestro(
+        ws_sedes, "Maestro de Sedes",
+        ["CÓDIGO", "NOMBRE", "ACTIVA"],
+        maestros.get("sedes", []),
+        ["codigo", "nombre", "activa"],
+    )
 
-    # ── Hoja Detalle Items ────────────────────────────────────────────────────
-    detalle_headers = [
-        "N° Factura", "Archivo", "# Item", "Descripción",
-        "Cantidad", "Unidad", "Precio Unitario", "Precio Unitario Calculado",
-        "Subtotal Item", "Moneda",
-    ]
-    _write_header_row(ws_detalle, detalle_headers, color=_COLOR_SUBHEADER)
+    ws_cc = wb.create_sheet("Maestro Centro Costos")
+    _write_maestro(
+        ws_cc, "Maestro de Centros de Costo",
+        ["CÓDIGO", "NOMBRE", "ACTIVO"],
+        maestros.get("centros_costos", []),
+        ["codigo", "nombre", "activo"],
+    )
 
-    detalle_row = 2
-    for factura in facturas:
-        numero = factura.get("numero_factura", "")
-        archivo = factura.get("filename", "")
-        moneda = factura.get("moneda", "PEN")
-        for j, item in enumerate(factura.get("items") or [], start=1):
-            row_data = [
-                numero,
-                archivo,
-                j,
-                item.get("descripcion", ""),
-                item.get("cantidad", ""),
-                item.get("unidad_medida", ""),
-                item.get("precio_unitario", ""),
-                "SÍ" if item.get("precio_unitario_calculado") else "NO",
-                item.get("subtotal_item", ""),
-                moneda,
-            ]
-            for col_idx, value in enumerate(row_data, start=1):
-                cell = ws_detalle.cell(row=detalle_row, column=col_idx, value=value)
-                cell.font = _cell_font()
-                cell.alignment = Alignment(vertical="center")
-            detalle_row += 1
+    ws_ln = wb.create_sheet("Maestro Linea Negocio Servicios")
+    _write_maestro(
+        ws_ln, "Maestro de Líneas de Negocio",
+        ["CÓDIGO", "NOMBRE"],
+        maestros.get("lineas_negocio", []),
+        ["codigo", "nombre"],
+    )
 
-    _autofit_columns(ws_detalle)
-    ws_detalle.freeze_panes = "A2"
+    ws_proy = wb.create_sheet("Maestro Proyectos")
+    _write_maestro(
+        ws_proy, "Maestro de Proyectos",
+        ["CÓDIGO", "NOMBRE", "ACTIVO"],
+        maestros.get("proyectos", []),
+        ["codigo", "nombre", "activo"],
+    )
 
-    # ── Metadata del workbook ─────────────────────────────────────────────────
-    wb.properties.title = "Reporte de Facturas — Transaltisa"
+    ws_etl = wb.create_sheet("Maestro ETL")
+    _write_maestro(
+        ws_etl, "Maestro ETL / Terceros",
+        ["CÓDIGO", "DESCRIPCIÓN"],
+        maestros.get("etl", []),
+        ["codigo", "descripcion"],
+    )
+
+    ws_cuentas = wb.create_sheet("Cuentas Cont.")
+    _write_maestro(
+        ws_cuentas, "Plan de Cuentas Contables",
+        ["CUENTA", "DESCRIPCIÓN", "TIPO"],
+        maestros.get("cuentas", []),
+        ["cuenta", "descripcion", "tipo"],
+    )
+
+    # ── Metadatos del workbook ───────────────────────────────────────────────
+    wb.properties.title = f"Distribución Facturas — Transaltisa"
     wb.properties.creator = "Azoramind"
     wb.properties.created = datetime.utcnow()
 
-    # Serializar a bytes en memoria
+    # Ordenar hojas: Plantilla primero, luego Hoja1, luego Maestros
+    # (openpyxl usa índice de posición)
+    ws_plantilla.sheet_properties.tabColor = "2E75B6"
+    ws_hoja1.sheet_properties.tabColor = "1F4E79"
+
+    # Serializar a bytes
     buffer = io.BytesIO()
     wb.save(buffer)
     buffer.seek(0)
 
     logger.info(
-        f"[ExcelGenerator] Generado: {len(facturas)} facturas, "
-        f"{detalle_row - 2} ítems"
+        f"[ExcelGenerator] Generado: {len(filas_distribucion)} filas de distribución, "
+        f"{wb.sheetnames}"
     )
     return buffer.getvalue()

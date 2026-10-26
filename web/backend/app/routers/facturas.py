@@ -12,7 +12,10 @@ from app.auth.jwt import TokenData, get_current_user
 from app.config import settings
 from app.database import get_db
 from app.services.pdf_extractor import extract_invoice_data
-from app.services.valor_unitario import enriquecer_factura
+from app.services.plantilla_service import (
+    distribuir_factura,
+    obtener_plantilla_por_proveedor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -144,20 +147,44 @@ def get_pdf(
 
 
 async def _procesar_factura(factura_id: int, pdf_bytes: bytes, filename: str) -> None:
-    """Task background: OCR → extracción IA → cálculo valores unitarios → guardar."""
+    """Task background: OCR → extracción IA → distribución contable → guardar."""
     logger.info(f"[Background] Procesando factura id={factura_id}")
 
     try:
-        # Extracción con IA
-        datos_raw = await extract_invoice_data(pdf_bytes, filename)
-        datos = enriquecer_factura(datos_raw)
+        # Paso 1: extracción con IA (OCR + Claude)
+        datos = await extract_invoice_data(pdf_bytes, filename)
 
         if "error" in datos:
             _actualizar_estado(factura_id, "error", str(datos["error"]))
             return
 
-        # Persistir resultados
+        # Paso 2: persistir cabecera de la factura
         _guardar_resultados(factura_id, datos)
+
+        # Paso 3: distribución contable (si existe plantilla para el proveedor)
+        proveedor_ruc = datos.get("proveedor_ruc")
+        subtotal = datos.get("subtotal")
+        numero = datos.get("numero_documento") or datos.get("numero_factura") or filename
+
+        if proveedor_ruc and subtotal:
+            plantilla = obtener_plantilla_por_proveedor(proveedor_ruc)
+            if plantilla:
+                distribuir_factura(
+                    factura_id=factura_id,
+                    subtotal=float(subtotal),
+                    numero_documento=numero,
+                    plantilla=plantilla,
+                )
+                logger.info(
+                    f"[Background] Factura {factura_id}: distribución aplicada "
+                    f"con plantilla '{plantilla['nombre']}'"
+                )
+            else:
+                logger.warning(
+                    f"[Background] Factura {factura_id}: sin plantilla para RUC {proveedor_ruc}. "
+                    f"La factura se guarda pero no se distribuye."
+                )
+
         logger.info(f"[Background] Factura id={factura_id} procesada OK")
 
     except Exception as e:
