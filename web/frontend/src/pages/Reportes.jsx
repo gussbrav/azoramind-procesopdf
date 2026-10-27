@@ -13,10 +13,12 @@ export default function Reportes() {
     solo_alertas: false,
   })
   const [loading, setLoading] = useState(false)
+  const [exportError, setExportError] = useState(null)
   const [stats, setStats] = useState(null)
 
   const handleExport = async () => {
     setLoading(true)
+    setExportError(null)
     try {
       const params = Object.fromEntries(
         Object.entries(filters).filter(([, v]) => v !== "" && v !== false)
@@ -29,18 +31,35 @@ export default function Reportes() {
       const a = document.createElement("a")
       a.href = url
       a.download = `Facturas_${new Date().toISOString().slice(0, 10)}.xlsx`
+      document.body.appendChild(a)
       a.click()
+      document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (err) {
-      console.error("Error al exportar:", err)
+      // Leer el mensaje del blob de error
+      if (err.response?.data instanceof Blob) {
+        const text = await err.response.data.text()
+        try {
+          const parsed = JSON.parse(text)
+          setExportError(parsed.detail || "Error al exportar")
+        } catch {
+          setExportError(text || "Error al exportar")
+        }
+      } else {
+        setExportError(err.response?.data?.detail || err.message || "Error al exportar")
+      }
     } finally {
       setLoading(false)
     }
   }
 
   const loadStats = async () => {
-    const { data } = await api.get("/api/reportes/stats")
-    setStats(data)
+    try {
+      const { data } = await api.get("/api/reportes/stats")
+      setStats(data)
+    } catch (err) {
+      console.error("Error stats:", err)
+    }
   }
 
   return (
