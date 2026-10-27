@@ -13,8 +13,8 @@ import api from '@/lib/api'
 const STORAGE_KEY = 'branding_config'
 
 const DEFAULTS = {
-  nombre_empresa: 'Sistema Jurídico',
-  subtitulo: 'Estudio de Abogados',
+  nombre_empresa: 'Transaltisa',
+  subtitulo: 'Procesamiento de Facturas',
   logo_url: '',
   color_primario: '#2563eb',
 }
