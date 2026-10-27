@@ -35,17 +35,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
 
-VALID_ROLES = {"admin", "abogado", "asistente"}
+VALID_ROLES = {"admin", "operador"}
 
 # Invitaciones expiran en 48 horas
 INVITE_EXPIRY_HOURS = 48
 
 # DDL para crear tabla de invitaciones si no existe
 _CREATE_INVITATIONS_SQL = """
-CREATE TABLE IF NOT EXISTS gestordocumentos.invitations (
+CREATE TABLE IF NOT EXISTS invitations (
     id          SERIAL PRIMARY KEY,
     email       TEXT NOT NULL,
-    role        TEXT NOT NULL DEFAULT 'abogado',
+    role        TEXT NOT NULL DEFAULT 'operador',
     token       TEXT NOT NULL UNIQUE,
     invited_by  TEXT NOT NULL,
     expires_at  TIMESTAMPTZ NOT NULL,
@@ -79,24 +79,24 @@ def login(request: Request, payload: LoginRequest):
     pueda extraer la IP del cliente — no se usa directamente en la lógica.
     """
     if settings.demo_mode:
-        if payload.username != "carlos" or payload.password != "demo123":
+        if payload.username != "demo" or payload.password != "demo123":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Credenciales incorrectas. En modo demo usa carlos / demo123",
+                detail="Credenciales incorrectas. En modo demo usa demo / demo123",
             )
-        access_token = create_access_token(data={"sub": "carlos", "role": "admin"})
+        access_token = create_access_token(data={"sub": "demo", "role": "admin"})
         return TokenResponse(access_token=access_token, role="admin")
 
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, username, password_hash, role, nombre_completo "
-                "FROM gestordocumentos.web_users WHERE username = %s",
+                "SELECT id, username, hashed_password, role "
+                "FROM users WHERE username = %s AND is_active = TRUE",
                 (payload.username,)
             )
             user = cur.fetchone()
 
-    if not user or not verify_password(payload.password, user["password_hash"]):
+    if not user or not verify_password(payload.password, user["hashed_password"]):
         log_audit_event(
             event="login.failed",
             actor=payload.username,
@@ -108,7 +108,7 @@ def login(request: Request, payload: LoginRequest):
             detail="Usuario o contraseña incorrectos",
         )
 
-    role = user.get("role") or "abogado"
+    role = user.get("role") or "operador"
     access_token = create_access_token(data={"sub": user["username"], "role": role})
     log_audit_event(
         event="login.success",
@@ -116,11 +116,7 @@ def login(request: Request, payload: LoginRequest):
         request=request,
         details={"role": role},
     )
-    return TokenResponse(
-        access_token=access_token,
-        role=role,
-        nombre_completo=user.get("nombre_completo"),
-    )
+    return TokenResponse(access_token=access_token, role=role)
 
 
 # ---------------------------------------------------------------------------
@@ -147,12 +143,12 @@ def register(data: RegisterRequest, request: Request, admin: TokenData = Depends
             detail="El usuario debe tener al menos 3 caracteres",
         )
 
-    password_hash = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
+    hashed_password = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
 
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id FROM gestordocumentos.web_users WHERE username = %s",
+                "SELECT id FROM users WHERE username = %s",
                 (data.username,)
             )
             if cur.fetchone():
@@ -161,9 +157,9 @@ def register(data: RegisterRequest, request: Request, admin: TokenData = Depends
                     detail=f"El usuario '{data.username}' ya existe",
                 )
             cur.execute(
-                "INSERT INTO gestordocumentos.web_users (username, password_hash, role, nombre_completo) "
-                "VALUES (%s, %s, %s, %s) RETURNING id",
-                (data.username, password_hash, data.role, data.nombre_completo),
+                "INSERT INTO users (username, hashed_password, role) "
+                "VALUES (%s, %s, %s) RETURNING id",
+                (data.username, hashed_password, data.role),
             )
             new_id = cur.fetchone()[0]
         conn.commit()
@@ -218,7 +214,7 @@ def invite_user(data: InviteRequest, request: Request, admin: TokenData = Depend
         with conn.cursor() as cur:
             # Verificar si ya hay invitación pendiente para este email
             cur.execute(
-                "SELECT id FROM gestordocumentos.invitations "
+                "SELECT id FROM invitations "
                 "WHERE email = %s AND accepted_at IS NULL AND expires_at > NOW()",
                 (data.email,)
             )
@@ -229,7 +225,7 @@ def invite_user(data: InviteRequest, request: Request, admin: TokenData = Depend
                 )
 
             cur.execute(
-                "INSERT INTO gestordocumentos.invitations (email, role, token, invited_by, expires_at) "
+                "INSERT INTO invitations (email, role, token, invited_by, expires_at) "
                 "VALUES (%s, %s, %s, %s, %s) RETURNING id",
                 (data.email, data.role, token, admin.username, expires_at),
             )
@@ -248,9 +244,7 @@ def invite_user(data: InviteRequest, request: Request, admin: TokenData = Depend
 
     invite_url = f"{origin}/invite?token={token}"
 
-    # Enviar email
-    from app.services.email_service import send_invitation_email
-    email_sent = send_invitation_email(data.email, invite_url, data.role, admin.username)
+    email_sent = False  # Email no configurado en este sistema
 
     log_audit_event(
         event="invitation.created",
@@ -275,7 +269,7 @@ def verify_invite(token: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "SELECT email, role, expires_at, accepted_at "
-                "FROM gestordocumentos.invitations WHERE token = %s",
+                "FROM invitations WHERE token = %s",
                 (token,)
             )
             inv = cur.fetchone()
@@ -315,7 +309,7 @@ def accept_invite(data: AcceptInviteRequest):
             # Validar token
             cur.execute(
                 "SELECT id, email, role, expires_at, accepted_at "
-                "FROM gestordocumentos.invitations WHERE token = %s",
+                "FROM invitations WHERE token = %s",
                 (data.token,)
             )
             inv = cur.fetchone()
@@ -329,7 +323,7 @@ def accept_invite(data: AcceptInviteRequest):
 
             # Verificar username no duplicado
             cur.execute(
-                "SELECT id FROM gestordocumentos.web_users WHERE username = %s",
+                "SELECT id FROM users WHERE username = %s",
                 (data.username,)
             )
             if cur.fetchone():
@@ -339,17 +333,17 @@ def accept_invite(data: AcceptInviteRequest):
                 )
 
             # Crear usuario
-            password_hash = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
+            hashed_password = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
             cur.execute(
-                "INSERT INTO gestordocumentos.web_users (username, password_hash, role, nombre_completo) "
-                "VALUES (%s, %s, %s, %s) RETURNING id",
-                (data.username, password_hash, inv["role"], data.nombre_completo),
+                "INSERT INTO users (username, hashed_password, role) "
+                "VALUES (%s, %s, %s) RETURNING id",
+                (data.username, hashed_password, inv["role"]),
             )
             cur.fetchone()
 
             # Marcar invitación como aceptada
             cur.execute(
-                "UPDATE gestordocumentos.invitations SET accepted_at = NOW() WHERE id = %s",
+                "UPDATE invitations SET accepted_at = NOW() WHERE id = %s",
                 (inv["id"],)
             )
         conn.commit()
@@ -379,7 +373,7 @@ def list_invitations(admin: TokenData = Depends(require_admin)):
                 "created_at::text AS created_at, "
                 "expires_at::text AS expires_at, "
                 "accepted_at::text AS accepted_at "
-                "FROM gestordocumentos.invitations "
+                "FROM invitations "
                 "ORDER BY created_at DESC LIMIT 50"
             )
             rows = cur.fetchall()
@@ -392,7 +386,7 @@ def cancel_invitation(invite_id: int, request: Request, admin: TokenData = Depen
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT email, accepted_at FROM gestordocumentos.invitations WHERE id = %s",
+                "SELECT email, accepted_at FROM invitations WHERE id = %s",
                 (invite_id,)
             )
             inv = cur.fetchone()
@@ -400,7 +394,7 @@ def cancel_invitation(invite_id: int, request: Request, admin: TokenData = Depen
                 raise HTTPException(status_code=404, detail="Invitación no encontrada")
             if inv["accepted_at"]:
                 raise HTTPException(status_code=400, detail="No se puede cancelar una invitación ya aceptada")
-            cur.execute("DELETE FROM gestordocumentos.invitations WHERE id = %s", (invite_id,))
+            cur.execute("DELETE FROM invitations WHERE id = %s", (invite_id,))
         conn.commit()
 
     log_audit_event(
@@ -422,9 +416,8 @@ def list_users(admin: TokenData = Depends(require_admin)):
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, username, role, nombre_completo, "
-                "created_at::text AS created_at "
-                "FROM gestordocumentos.web_users ORDER BY id"
+                "SELECT id, username, role, created_at::text AS created_at "
+                "FROM users ORDER BY id"
             )
             rows = cur.fetchall()
     return rows
@@ -436,7 +429,7 @@ def delete_user(user_id: int, request: Request, admin: TokenData = Depends(requi
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT username FROM gestordocumentos.web_users WHERE id = %s",
+                "SELECT username FROM users WHERE id = %s",
                 (user_id,)
             )
             user = cur.fetchone()
@@ -448,7 +441,7 @@ def delete_user(user_id: int, request: Request, admin: TokenData = Depends(requi
                     detail="No puedes eliminar tu propio usuario",
                 )
             cur.execute(
-                "DELETE FROM gestordocumentos.web_users WHERE id = %s", (user_id,)
+                "DELETE FROM users WHERE id = %s", (user_id,)
             )
         conn.commit()
 

@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { LoadingSpinner } from "@/components/shared/LoadingSpinner"
+import LoadingSpinner from "@/components/shared/LoadingSpinner"
 import api from "@/lib/api"
 
 export default function UploadFactura() {

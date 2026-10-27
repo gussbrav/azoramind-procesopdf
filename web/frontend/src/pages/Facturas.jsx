@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { StatusBadge } from "@/components/shared/StatusBadge"
-import { DataTable } from "@/components/shared/DataTable"
-import { LoadingSpinner } from "@/components/shared/LoadingSpinner"
+import StatusBadge from "@/components/shared/StatusBadge"
+import DataTable from "@/components/shared/DataTable"
+import LoadingSpinner from "@/components/shared/LoadingSpinner"
 import api from "@/lib/api"
 
 const COLUMNS = [

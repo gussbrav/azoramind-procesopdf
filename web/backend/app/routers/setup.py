@@ -1,6 +1,5 @@
 """
 Endpoint de setup inicial — solo funciona si no hay usuarios en la DB.
-Similar al flujo de primer acceso de NocoDB / Chatwoot.
 """
 import bcrypt
 from fastapi import APIRouter, HTTPException, status
@@ -21,7 +20,7 @@ def setup_status():
     """Retorna si el sistema ya fue configurado (hay al menos un usuario)."""
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM gestordocumentos.web_users")
+            cur.execute("SELECT COUNT(*) FROM users")
             count = cur.fetchone()[0]
     return {"needs_setup": count == 0}
 
@@ -32,24 +31,27 @@ def create_admin(data: SetupRequest):
     if len(data.password) < 6:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="La contraseña debe tener al menos 6 caracteres"
+            detail="La contraseña debe tener al menos 6 caracteres",
         )
 
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM gestordocumentos.web_users")
+            cur.execute("SELECT COUNT(*) FROM users")
             count = cur.fetchone()[0]
             if count > 0:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="El sistema ya fue configurado. Usa el login normal."
+                    detail="El sistema ya fue configurado. Usa el login normal.",
                 )
-            password_hash = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
+            hashed_password = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
             cur.execute(
-                "INSERT INTO gestordocumentos.web_users (username, password_hash, role, nombre_completo) "
-                "VALUES (%s, %s, 'admin', %s)",
-                (data.username, password_hash, data.nombre_completo or None)
+                "INSERT INTO users (username, hashed_password, role) "
+                "VALUES (%s, %s, 'admin') RETURNING id",
+                (data.username, hashed_password),
             )
-        conn.commit()
+            new_id = cur.fetchone()[0]
 
-    return {"message": f"Administrador '{data.username}' creado correctamente. Ya puedes iniciar sesión."}
+    return {
+        "message": f"Administrador '{data.username}' creado. Ya puedes iniciar sesión.",
+        "id": new_id,
+    }
