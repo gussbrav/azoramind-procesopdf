@@ -67,15 +67,14 @@ def obtener_stats(
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
-                    COUNT(DISTINCT f.id)                              AS total_facturas,
-                    COUNT(DISTINCT f.id) FILTER (WHERE f.estado = 'procesado')  AS procesadas,
-                    COUNT(DISTINCT f.id) FILTER (WHERE f.estado = 'pendiente')  AS pendientes,
-                    COUNT(DISTINCT f.id) FILTER (WHERE f.estado = 'error')      AS con_error,
-                    COUNT(DISTINCT d.factura_id)                       AS con_distribucion,
-                    SUM(f.subtotal)                                    AS monto_total,
-                    AVG(f.confianza_ia)                                AS confianza_promedio
-                FROM facturas f
-                LEFT JOIN distribucion_facturas d ON d.factura_id = f.id
+                    COUNT(*)                                                     AS total_facturas,
+                    COUNT(*) FILTER (WHERE estado = 'procesado')                AS procesadas,
+                    COUNT(*) FILTER (WHERE estado = 'pendiente')                AS pendientes,
+                    COUNT(*) FILTER (WHERE estado = 'error')                    AS con_error,
+                    (SELECT COUNT(DISTINCT factura_id) FROM distribucion_facturas) AS con_distribucion,
+                    SUM(subtotal)                                                AS monto_total,
+                    AVG(confianza_ia)                                            AS confianza_promedio
+                FROM facturas
             """)
             stats = dict(cur.fetchone())
 

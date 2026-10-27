@@ -21,6 +21,7 @@ def init_db_pool() -> None:
         minconn=1,
         maxconn=10,
         dsn=settings.database_url,
+        cursor_factory=RealDictCursor,
     )
 
 

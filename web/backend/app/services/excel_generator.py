@@ -99,8 +99,11 @@ def _write_hoja1(ws, filas: list[dict]) -> None:
     ws.freeze_panes = "A2"
 
     # ── Filas de datos ───────────────────────────────────────────────────────
+    _NUM_FIELDS = ("costo_unitario", "subtotal_factura", "cantidad", "porcentaje_aplicado")
     total_costo = 0.0
     for row_idx, fila in enumerate(filas, start=2):
+        # psycopg2 devuelve Decimal para columnas NUMERIC — convertir a float para openpyxl
+        fila = {k: (float(v) if k in _NUM_FIELDS and v is not None else v) for k, v in fila.items()}
         bg = _GRIS_CLARO if row_idx % 2 == 0 else _BLANCO
         for col_idx, key in enumerate(_HOJA1_KEYS, start=1):
             value = fila.get(key, "")
