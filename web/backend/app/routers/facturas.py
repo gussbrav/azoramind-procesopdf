@@ -32,22 +32,25 @@ def list_facturas(
     """Lista todas las facturas con paginación y filtro opcional por estado."""
     offset = (page - 1) * limit
 
+    _COLS = (
+        "id, nombre_archivo, numero_factura, fecha_emision, "
+        "proveedor_ruc, proveedor_razon_social, moneda, "
+        "subtotal, igv, total_declarado, total_calculado, total_discrepancia, "
+        "estado, confianza_ia, created_at"
+    )
+
     with get_db() as conn:
         with conn.cursor() as cur:
-            base_query = "SELECT * FROM facturas"
-            params: list = []
+            where = " WHERE estado = %s" if estado else ""
+            params: list = [estado] if estado else []
 
-            if estado:
-                base_query += " WHERE estado = %s"
-                params.append(estado)
-
-            base_query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
-            params.extend([limit, offset])
-
-            cur.execute(base_query, params)
+            cur.execute(
+                f"SELECT {_COLS} FROM facturas{where} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                params + [limit, offset],
+            )
             rows = cur.fetchall()
 
-            cur.execute("SELECT COUNT(*) FROM facturas" + (" WHERE estado = %s" if estado else ""), [estado] if estado else [])
+            cur.execute(f"SELECT COUNT(*) FROM facturas{where}", params)
             total = cur.fetchone()["count"]
 
     return {

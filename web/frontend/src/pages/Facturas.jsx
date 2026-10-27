@@ -19,21 +19,25 @@ const COLUMNS = [
 export default function Facturas() {
   const [facturas, setFacturas] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
 
   useEffect(() => {
-    const fetch = async () => {
+    const fetchData = async () => {
       setLoading(true)
+      setError(null)
       try {
         const { data } = await api.get("/api/facturas", { params: { page, limit: 20 } })
-        setFacturas(data.data)
-        setTotal(data.total)
+        setFacturas(data.data || [])
+        setTotal(data.total || 0)
+      } catch (err) {
+        setError(err.response?.data?.detail || "Error al cargar facturas")
       } finally {
         setLoading(false)
       }
     }
-    fetch()
+    fetchData()
   }, [page])
 
   return (
@@ -44,6 +48,8 @@ export default function Facturas() {
       <CardContent>
         {loading ? (
           <LoadingSpinner />
+        ) : error ? (
+          <p className="text-red-600 text-sm py-4">{error}</p>
         ) : (
           <DataTable columns={COLUMNS} rows={facturas} />
         )}
