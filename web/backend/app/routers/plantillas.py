@@ -28,13 +28,16 @@ class FilaIn(BaseModel):
     proyecto: str
     descripcion: str
     etl_terceros: str = "-"
-    porcentaje: float  # valor decimal, ej: 0.003334 para 0.3334%
+    costo_unitario_referencia: float  # Fase 1: monto fijo
+    porcentaje: Optional[float] = None  # Fase 2: se calcula o se provee
 
 
 class PlantillaIn(BaseModel):
     nombre: str
     proveedor_ruc: Optional[str] = None
     descripcion: Optional[str] = None
+    usar_porcentaje: bool = False
+    subtotal_referencia: Optional[float] = None
     filas: list[FilaIn]
 
 
@@ -77,22 +80,28 @@ def create_plantilla(body: PlantillaIn, current_user: TokenData = Depends(get_cu
     """
     Crea una nueva plantilla con sus filas de distribución.
 
-    La suma de todos los porcentajes debería ser 1.0 (100%).
-    Se valida y advierte si hay diferencia > 0.001.
+    Fase 1 (usar_porcentaje=False): cada fila provee costo_unitario_referencia.
+    Fase 2 (usar_porcentaje=True): cada fila debe incluir porcentaje;
+      la suma de porcentajes debe ser 1.0 ± 0.001.
     """
-    suma = sum(f.porcentaje for f in body.filas)
-    if abs(suma - 1.0) > 0.001:
-        raise HTTPException(
-            status_code=422,
-            detail=f"La suma de porcentajes es {suma:.6f} (esperado 1.0 = 100%). "
-                   f"Diferencia: {abs(suma - 1.0):.6f}",
-        )
+    if body.usar_porcentaje:
+        suma = sum(f.porcentaje or 0.0 for f in body.filas)
+        if abs(suma - 1.0) > 0.001:
+            raise HTTPException(
+                status_code=422,
+                detail=f"La suma de porcentajes es {suma:.6f} (esperado 1.0 = 100%). "
+                       f"Diferencia: {abs(suma - 1.0):.6f}",
+            )
 
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO plantillas (nombre, proveedor_ruc, descripcion) VALUES (%s,%s,%s) RETURNING id",
-                [body.nombre, body.proveedor_ruc, body.descripcion],
+                """
+                INSERT INTO plantillas (nombre, proveedor_ruc, descripcion, usar_porcentaje, subtotal_referencia)
+                VALUES (%s,%s,%s,%s,%s) RETURNING id
+                """,
+                [body.nombre, body.proveedor_ruc, body.descripcion,
+                 body.usar_porcentaje, body.subtotal_referencia],
             )
             plantilla_id = cur.fetchone()["id"]
 
@@ -102,14 +111,15 @@ def create_plantilla(body: PlantillaIn, current_user: TokenData = Depends(get_cu
                     INSERT INTO plantilla_filas (
                         plantilla_id, orden, placa, sede_planta, cuenta,
                         centro_costos, linea_negocio_servicio, proyecto,
-                        descripcion, etl_terceros, porcentaje
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        descripcion, etl_terceros,
+                        costo_unitario_referencia, porcentaje
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     [
                         plantilla_id, fila.orden, fila.placa, fila.sede_planta,
                         fila.cuenta, fila.centro_costos, fila.linea_negocio_servicio,
                         fila.proyecto, fila.descripcion, fila.etl_terceros,
-                        fila.porcentaje,
+                        fila.costo_unitario_referencia, fila.porcentaje,
                     ],
                 )
 

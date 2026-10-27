@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
-  LayoutDashboard, FolderOpen, FileText, Upload, Calendar,
-  Clock, Bell, Settings, Scale, LogOut, ChevronUp,
+  LayoutDashboard, FileText, Upload, BarChart2,
+  Settings, Receipt, LogOut, ChevronUp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import useAuthStore from '@/store/authStore'
@@ -10,22 +10,14 @@ import useBrandingStore from '@/store/brandingStore'
 
 const menuItems = [
   { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
-  { label: 'Expedientes', icon: FolderOpen, path: '/expedientes' },
   {
-    label: 'Documentos', isSection: true,
+    label: 'Facturas', isSection: true,
     children: [
-      { label: 'Todos los documentos', icon: FileText, path: '/documentos' },
-      { label: 'Subir PDF', icon: Upload, path: '/documentos/subir' },
+      { label: 'Todas las facturas', icon: FileText, path: '/facturas' },
+      { label: 'Subir factura', icon: Upload, path: '/facturas/subir' },
     ],
   },
-  {
-    label: 'Audiencias', isSection: true,
-    children: [
-      { label: 'Calendario', icon: Calendar, path: '/audiencias/calendario' },
-      { label: 'Proximas', icon: Clock, path: '/audiencias/proximas' },
-    ],
-  },
-  { label: 'Notificaciones', icon: Bell, path: '/notificaciones' },
+  { label: 'Reportes Excel', icon: BarChart2, path: '/reportes' },
 ]
 
 function MenuItem({ icon: Icon, label, path, badge }) {
@@ -133,7 +125,7 @@ export default function Sidebar() {
               className="w-10 h-10 rounded-xl flex items-center justify-center shadow-md shrink-0"
               style={{ backgroundColor: color_primario }}
             >
-              <Scale size={22} className="text-white" />
+              <Receipt size={22} className="text-white" />
             </div>
           )}
           <div className="min-w-0">

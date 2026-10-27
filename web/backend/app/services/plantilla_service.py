@@ -70,32 +70,40 @@ def distribuir_factura(
     """
     Aplica la plantilla al subtotal de la factura.
 
-    Calcula costo_unitario = subtotal × porcentaje para cada fila.
-    Persiste en distribucion_facturas y retorna las filas para el Excel.
+    Fase 1 (usar_porcentaje=False):
+      costo_unitario = costo_unitario_referencia (monto fijo de la plantilla)
 
-    El último centavo de diferencia por redondeo se ajusta en la última fila
-    para garantizar que sum(costo_unitario) == subtotal.
+    Fase 2 (usar_porcentaje=True):
+      costo_unitario = subtotal × porcentaje
+      El último centavo de redondeo se ajusta en la última fila.
+
+    Persiste en distribucion_facturas y retorna las filas para el Excel.
     """
     subtotal_d = Decimal(str(subtotal))
     filas = plantilla["filas"]
     plantilla_id = plantilla["id"]
+    usar_porcentaje = plantilla.get("usar_porcentaje", False)
 
     if not filas:
         logger.warning(f"[Plantilla] Plantilla '{plantilla['nombre']}' sin filas")
         return []
 
-    # Calcular costo_unitario por fila
     filas_calculadas = []
     suma = Decimal("0")
 
     for i, fila in enumerate(filas):
-        porcentaje = Decimal(str(fila["porcentaje"]))
-        costo = (subtotal_d * porcentaje).quantize(_DECIMALES, ROUND_HALF_UP)
-
-        # Ajuste de redondeo en última fila
-        if i == len(filas) - 1:
-            costo = subtotal_d - suma
-            costo = costo.quantize(_DECIMALES, ROUND_HALF_UP)
+        if usar_porcentaje:
+            # Fase 2: porcentaje × subtotal real
+            porcentaje = Decimal(str(fila["porcentaje"]))
+            costo = (subtotal_d * porcentaje).quantize(_DECIMALES, ROUND_HALF_UP)
+            # Ajuste de redondeo en última fila
+            if i == len(filas) - 1:
+                costo = (subtotal_d - suma).quantize(_DECIMALES, ROUND_HALF_UP)
+        else:
+            # Fase 1: montos fijos de la plantilla de referencia
+            costo = Decimal(str(fila["costo_unitario_referencia"])).quantize(
+                _DECIMALES, ROUND_HALF_UP
+            )
 
         suma += costo
 
@@ -110,18 +118,17 @@ def distribuir_factura(
             "descripcion": fila.get("descripcion", ""),
             "cantidad": 1,
             "etl_terceros": fila.get("etl_terceros", "-"),
-            "porcentaje_aplicado": float(porcentaje),
             "subtotal_factura": subtotal,
             "costo_unitario": float(costo),
             "numero_factura": numero_documento,
         })
 
-    # Persistir en base de datos
     _guardar_distribucion(factura_id, plantilla_id, filas_calculadas)
 
     logger.info(
         f"[Plantilla] Factura {factura_id}: {len(filas_calculadas)} filas, "
-        f"suma={float(suma):.2f}, subtotal={subtotal}"
+        f"suma={float(suma):.2f}, subtotal={subtotal}, "
+        f"modo={'porcentaje' if usar_porcentaje else 'monto_fijo'}"
     )
     return filas_calculadas
 
@@ -130,7 +137,6 @@ def _guardar_distribucion(factura_id: int, plantilla_id: int, filas: list[dict])
     """Inserta las filas de distribución calculadas en la tabla distribucion_facturas."""
     with get_db() as conn:
         with conn.cursor() as cur:
-            # Limpiar distribuciones previas si se reprocesa
             cur.execute(
                 "DELETE FROM distribucion_facturas WHERE factura_id = %s",
                 [factura_id],
@@ -143,10 +149,9 @@ def _guardar_distribucion(factura_id: int, plantilla_id: int, filas: list[dict])
                         placa, sede_planta, cuenta, centro_costos,
                         linea_negocio_servicio, proyecto, descripcion,
                         cantidad, etl_terceros,
-                        porcentaje_aplicado, subtotal_factura, costo_unitario,
-                        numero_factura
+                        subtotal_factura, costo_unitario, numero_factura
                     ) VALUES (
-                        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
+                        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
                     )
                     """,
                     [
@@ -155,7 +160,7 @@ def _guardar_distribucion(factura_id: int, plantilla_id: int, filas: list[dict])
                         fila["centro_costos"], fila["linea_negocio_servicio"],
                         fila["proyecto"], fila["descripcion"],
                         fila["cantidad"], fila["etl_terceros"],
-                        fila["porcentaje_aplicado"], fila["subtotal_factura"],
-                        fila["costo_unitario"], fila["numero_factura"],
+                        fila["subtotal_factura"], fila["costo_unitario"],
+                        fila["numero_factura"],
                     ],
                 )
