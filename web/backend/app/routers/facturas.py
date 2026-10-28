@@ -67,9 +67,16 @@ def get_factura(
     current_user: TokenData = Depends(get_current_user),
 ):
     """Retorna el detalle completo de una factura incluyendo sus ítems."""
+    _COLS = (
+        "id, nombre_archivo, numero_factura, fecha_emision, "
+        "proveedor_ruc, proveedor_razon_social, cliente_ruc, cliente_razon_social, moneda, "
+        "subtotal, igv, total_declarado, total_calculado, total_discrepancia, "
+        "estado, error_mensaje, confianza_ia, raw_json, created_at, updated_at"
+    )
+
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM facturas WHERE id = %s", [factura_id])
+            cur.execute(f"SELECT {_COLS} FROM facturas WHERE id = %s", [factura_id])
             factura = cur.fetchone()
             if not factura:
                 raise HTTPException(status_code=404, detail="Factura no encontrada")
@@ -81,6 +88,56 @@ def get_factura(
             items = cur.fetchall()
 
     return {**dict(factura), "items": [dict(i) for i in items]}
+
+
+@router.delete("/{factura_id}")
+def delete_factura(
+    factura_id: int,
+    current_user: TokenData = Depends(get_current_user),
+):
+    """Elimina una factura y todos sus datos relacionados (ítems + distribución)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM facturas WHERE id = %s", [factura_id])
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Factura no encontrada")
+            cur.execute("DELETE FROM facturas WHERE id = %s", [factura_id])
+    return {"ok": True, "factura_id": factura_id}
+
+
+@router.post("/{factura_id}/reprocesar")
+async def reprocesar_factura(
+    factura_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: TokenData = Depends(get_current_user),
+):
+    """Vuelve a procesar una factura existente (OCR + extracción IA + distribución)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pdf_data, nombre_archivo FROM facturas WHERE id = %s", [factura_id])
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Factura no encontrada")
+            if not row["pdf_data"]:
+                raise HTTPException(status_code=400, detail="PDF no disponible para reprocesar")
+
+            # Limpiar resultados anteriores
+            cur.execute(
+                "UPDATE facturas SET estado = 'pendiente', error_mensaje = NULL, "
+                "numero_factura = NULL, fecha_emision = NULL, proveedor_ruc = NULL, "
+                "proveedor_razon_social = NULL, subtotal = NULL, igv = NULL, "
+                "total_declarado = NULL, total_calculado = NULL, total_discrepancia = 0, "
+                "confianza_ia = NULL, raw_json = NULL WHERE id = %s",
+                [factura_id],
+            )
+            cur.execute("DELETE FROM factura_items WHERE factura_id = %s", [factura_id])
+            cur.execute("DELETE FROM distribucion_facturas WHERE factura_id = %s", [factura_id])
+
+    pdf_bytes = bytes(row["pdf_data"])
+    filename = row["nombre_archivo"]
+    background_tasks.add_task(_procesar_factura, factura_id, pdf_bytes, filename)
+
+    return {"ok": True, "factura_id": factura_id, "mensaje": "Reprocesamiento iniciado"}
 
 
 @router.post("/upload")
