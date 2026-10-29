@@ -1,7 +1,7 @@
 -- =============================================================================
 -- Seed: Plantilla "Claro Internet" — Transaltisa
 -- Fuente: CLARO INTERNET.xlsx (tab Plantilla) — subtotal referencia 7,423.33
--- RUC Claro Perú: 20461299255
+-- RUC Claro Perú: 20467534026
 -- =============================================================================
 
 BEGIN;
@@ -9,7 +9,7 @@ BEGIN;
 INSERT INTO plantillas (nombre, proveedor_ruc, descripcion, usar_porcentaje, subtotal_referencia, activa)
 VALUES (
     'Claro Internet',
-    '20461299255',
+    '20467534026',
     'Distribución de costos Internet Corporativo Claro — 30 centros de costo',
     FALSE,
     7423.33,
